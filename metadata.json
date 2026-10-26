@@ -1,0 +1,6 @@
+{
+  "name": "Docker Backup & Replication",
+  "description": "Enterprise Veeam-style backup, replication, and disaster recovery platform for Docker workloads across remote Linux hosts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

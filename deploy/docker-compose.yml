@@ -1,0 +1,96 @@
+version: '3.9'
+
+services:
+  # Central Veeam-style Backup Server API (FastAPI)
+  backup-controller:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://veeam_admin:Secr3tP@ss!@postgres:5432/veeam_catalog
+      - REDIS_URL=redis://redis:6379/0
+      - MASTER_ENCRYPTION_KEY=gAAAAABl-sample-fernet-master-key-32bytes=
+      - SECRET_KEY=enterprise-veeam-jwt-secret-signing-key
+    volumes:
+      - repo_data:/mnt/backup-storage
+      - /etc/veeam:/etc/veeam:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Celery Worker (The Backup Proxy process that moves data between hosts & repos)
+  backup-proxy-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker -l INFO -Q backup_tasks,restore_tasks,maintenance -c 8
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://veeam_admin:Secr3tP@ss!@postgres:5432/veeam_catalog
+      - REDIS_URL=redis://redis:6379/0
+      - MASTER_ENCRYPTION_KEY=gAAAAABl-sample-fernet-master-key-32bytes=
+    volumes:
+      - repo_data:/mnt/backup-storage
+    depends_on:
+      - postgres
+      - redis
+
+  # Celery Beat Scheduler (Job schedules, GFS consolidation, SureBackup)
+  backup-scheduler:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app beat -l INFO --scheduler redbeat.RedBeatScheduler
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://veeam_admin:Secr3tP@ss!@postgres:5432/veeam_catalog
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
+  # Veeam React Console Web UI
+  frontend-console:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backup-controller
+
+  # Catalog & Configuration Database (PostgreSQL 16)
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=veeam_admin
+      - POSTGRES_PASSWORD=Secr3tP@ss!
+      - POSTGRES_DB=veeam_catalog
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U veeam_admin -d veeam_catalog"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Task Broker & Cache (Redis 7)
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  repo_data:
